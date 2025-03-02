@@ -1,15 +1,19 @@
 #!/usr/bin/evn python3
 import os
 import re
+from bitarray import bitarray
 from Bio import Align
 from dataclasses import dataclass
-from typing import Dict, Generator, Optional, Tuple
+from typing import Dict, Generator, Optional, Tuple, Any
 
 CHARGE_MAP = {
     "positive": "01",
     "negative": "10",
     None: "00",
 }
+
+PURINE = {"A", "G"}
+PYRIMIDINE = {"C", "T"}
 
 @dataclass
 class AminoAcid:
@@ -27,7 +31,7 @@ class AminoAcid:
     def __repr__(self):
         return f"AminoAcid(name={self.name}, codons={self.codons}, code={self.code}, is_hydrophobic={self.is_hydrophobic}, is_aromatic={self.is_aromatic}, is_special={self.is_special}, charge={self.charge})"
 
-    def encode_delta(self, other: "AminoAcid") -> str:
+    def encode_delta(self, other: "AminoAcid") -> Any:
         """Encode the difference between two amino acids, treating self as mutation"""
         # Store charge
         delta_str = CHARGE_MAP[self.charge]
@@ -48,7 +52,7 @@ class AminoAcid:
             "1" if other.is_special != self.is_special else "0",
         ]
         delta_str += "".join(delta_bits)
-        return delta_str
+        return bitarray(delta_str)
 
 @dataclass
 class Metadata:
@@ -263,6 +267,9 @@ def load_fasfa_samples(path: str) -> Generator[Tuple[Metadata, str], None, None]
 
                 sequence = ""
             else:
+                # TODO: This does not scale with really large files, may want to be able to:
+                # 1. Preserve FastA metadata such as sequence length in lines and at what byte descriptions/sequences start
+                # 2. Stream the file in chunks from/to those given offsets
                 sequence += line.strip()
 
         if sequence:
@@ -303,22 +310,18 @@ def main():
 
     aligner = Align.PairwiseAligner(scoring="blastn")
     alignments = aligner.align(ref_sequence[1], sample_sequence[1])
+    alignment = alignments[0]
 
-    # Print to compare sequence lengths
-    print(f"Reference sequence length: {len(ref_sequence[1])}")
-    print(f"Sample sequence length: {len(sample_sequence[1])}")
+    for i, (ref_chunk, sample_chunk) in enumerate(zip(chunk_protein(alignment[0]), chunk_protein(alignment[1]))):
+        if is_start_codon(ref_chunk) or is_stop_codon(ref_chunk):
+            continue
 
-    for alignment in alignments:
-        print(f"Score: {alignment.score}")
+        ref_aa = map_codon(ref_chunk)
+        sample_aa = map_codon(sample_chunk)
 
-        # Print aligned segments of 50 chars from each on top of the other
-        # until we have printed the whole of each sequence
-
-        print(f"Aligned segments:")
-        print(f"{alignment[0]}")
-        print(f"{alignment[1]}")
-
-        break
+        if ref_aa and sample_aa and ref_aa != sample_aa:
+            print(f"Position {i}: {ref_aa} -> {sample_aa}")
+            print(f"Delta: {ref_aa.encode_delta(sample_aa)}")
 
     print("Amino acid encoding:")
     print(f"Amino acid {AMINO_ACIDS[11]} mutating to {AMINO_ACIDS[9]}")
